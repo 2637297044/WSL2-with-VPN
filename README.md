@@ -105,7 +105,7 @@ unset PROMPT_COMMAND http_proxy https_proxy all_proxy no_proxy _LAST_PROXY_CHECK
 cat >> ~/.bashrc << 'EOF'
 ```
 
-**下载、复制** `WSL2 智能自动代理配置.bashrc` 中的内容后**粘贴**进去，**回车**
+**下载、复制** `WSL2 智能自动代理配置.txt` 中的内容后**粘贴**进去，**回车**
 
 重新加载配置
 
