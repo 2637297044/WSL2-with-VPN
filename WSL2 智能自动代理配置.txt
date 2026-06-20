@@ -1,0 +1,150 @@
+# --- WSL2 智能自动代理配置 开始 ---
+# ⚠️ 请根据您的客户端实际端口修改下方数字
+export WSL_HTTP_PORT="7890"   # Clash 默认 7890, v2rayN 默认 10809
+export WSL_SOCKS_PORT="7890"  # Clash 默认 7890, v2rayN 默认 10808
+
+update_terminal_title() {
+    if [ -n "$http_proxy" ]; then
+        echo -ne "\033]0;🟢 WSL2 [Proxy ON]\007"
+    else
+        echo -ne "\033]0;🔴 WSL2 [Direct]\007"
+    fi
+}
+
+proxy_help() {
+    echo -e "\n\e[1;34m📖 WSL2 智能代理管理命令:\e[0m"
+    echo -e "  \e[1;32mproxy_on\e[0m      \e[90m开启代理 (连接物理机代理通道)\e[0m"
+    echo -e "  \e[1;33mproxy_off\e[0m     \e[90m关闭代理 (切换为物理网卡直连模式)\e[0m"
+    echo -e "  \e[1;36mproxy_status\e[0m  \e[90m查看当前代理连接状态与 IP\e[0m"
+    echo -e "  \e[1;35mproxy_help\e[0m    \e[90m显示此帮助信息\e[0m"
+    echo -e "\n\e[90m⚙️ 自动化特性:\e[0m"
+    echo -e "  \e[90m- 开机默认保持直连，并播报代理通道状态。\e[0m"
+    echo -e "  \e[90m- 运行中若代理软件关闭/节点失效，会自动切回直连并提示。\e[0m"
+    echo -e "  \e[90m- 运行中若代理恢复，会提示您手动开启。\e[0m\n"
+}
+
+_auto_proxy_check() {
+    local current_time=$(date +%s)
+    if [[ -n "$_LAST_PROXY_CHECK" ]] && (( current_time - _LAST_PROXY_CHECK < 5 )); then return 0; fi
+    export _LAST_PROXY_CHECK=$current_time
+
+    local host_ip=$(ip route show default 2>/dev/null | awk '{print $3}')
+    if [[ -z "$host_ip" ]] || [[ "$host_ip" == 10.* ]] || [[ "$host_ip" == 127.* ]]; then
+        host_ip=$(grep -v "127.0.0.53" /etc/resolv.conf | grep "nameserver" | awk '{print $2}' | grep -v "^10\." | head -n 1)
+    fi
+
+    if [[ -n "$host_ip" ]] && [[ "$host_ip" != "10."* ]] && [[ "$host_ip" != "127."* ]]; then
+        local proxy_url="http://$host_ip:$WSL_HTTP_PORT"
+        local code=$(curl -s -x "$proxy_url" --connect-timeout 1 -m 2 -o /dev/null -w "%{http_code}" "http://connect.rom.miui.com/generate_204" 2>/dev/null)
+        local is_alive=false
+        [[ "$code" == "204" || "$code" == "200" ]] && is_alive=true
+
+        if [[ "$is_alive" == true ]]; then
+            if [[ "$_PROXY_LAST_STATE" != "on" ]]; then
+                if [ -z "$http_proxy" ]; then
+                    echo -e "\n\e[32m💡 检测到代理已启动且通道正常，输入 'proxy_on' 即可开启。\e[0m"
+                fi
+                export _PROXY_LAST_STATE="on"
+            fi
+        else
+            if [[ "$_PROXY_LAST_STATE" != "off" ]]; then
+                if [ -n "$http_proxy" ]; then
+                    unset http_proxy https_proxy all_proxy no_proxy
+                    echo -e "\n\e[33m⚠️ 检测到代理已关闭或通道失效，已自动切回直连。输入 'proxy_on' 重新开启。\e[0m"
+                    update_terminal_title
+                fi
+                export _PROXY_LAST_STATE="off"
+            fi
+        fi
+    fi
+}
+
+proxy_on() {
+    export _LAST_PROXY_CHECK=0 
+    local host_ip=$(ip route show default 2>/dev/null | awk '{print $3}')
+    if [[ -z "$host_ip" ]] || [[ "$host_ip" == 10.* ]] || [[ "$host_ip" == 127.* ]]; then
+        host_ip=$(grep -v "127.0.0.53" /etc/resolv.conf | grep "nameserver" | awk '{print $2}' | grep -v "^10\." | head -n 1)
+    fi
+    
+    if [[ -n "$host_ip" ]] && [[ "$host_ip" != "10."* ]] && [[ "$host_ip" != "127."* ]]; then
+         local http_proxy_url="http://$host_ip:$WSL_HTTP_PORT"
+         local socks_proxy_url="socks5://$host_ip:$WSL_SOCKS_PORT"
+         
+         if [ "$http_proxy" == "$http_proxy_url" ]; then
+             echo -e "\e[90mℹ️ 代理当前已处于开启状态。输入 'proxy_off' 可关闭。\e[0m"
+             return 0
+         fi
+
+         local code=$(curl -s -x "$http_proxy_url" --connect-timeout 1 -m 2 -o /dev/null -w "%{http_code}" "http://connect.rom.miui.com/generate_204" 2>/dev/null)
+         
+         if [[ "$code" == "204" || "$code" == "200" ]]; then
+             export http_proxy="$http_proxy_url"
+             export https_proxy="$http_proxy_url"
+             export all_proxy="$socks_proxy_url"
+             export no_proxy="localhost,127.0.0.1,::1,*.local"
+             echo -e "\e[32m✅ 代理已开启，通道正常。输入 'proxy_off' 关闭代理。\e[0m"
+             update_terminal_title
+             export _PROXY_LAST_STATE="on"
+         else
+             unset http_proxy https_proxy all_proxy no_proxy
+             echo -e "\e[31m❌ 代理未响应，已保持直连模式。输入 'proxy_on' 重新尝试。\e[0m"
+             update_terminal_title
+             export _PROXY_LAST_STATE="off"
+         fi
+    fi
+}
+
+proxy_off() {
+    unset http_proxy https_proxy all_proxy no_proxy
+    export _LAST_PROXY_CHECK=$(($(date +%s) + 60)) 
+    echo -e "\e[33m🛑 代理已关闭 (直连模式)。输入 'proxy_on' 开启代理。\e[0m"
+    update_terminal_title
+    export _PROXY_LAST_STATE="off"
+}
+
+proxy_status() {
+    if [ -n "$http_proxy" ]; then
+        echo -e "\e[32m🟢 状态: 已开启 -> $http_proxy。输入 'proxy_off' 关闭。\e[0m"
+    else
+        echo -e "\e[33m🔴 状态: 已关闭 (直连)。输入 'proxy_on' 开启。\e[0m"
+    fi
+}
+
+if [[ -z "$PROMPT_COMMAND" ]]; then
+    PROMPT_COMMAND="_auto_proxy_check"
+elif [[ "$PROMPT_COMMAND" != *"_auto_proxy_check"* ]]; then
+    PROMPT_COMMAND="_auto_proxy_check; $PROMPT_COMMAND"
+fi
+
+# 🚀 开机初始化函数：强制直连 + 状态播报
+_init_proxy_env() {
+    unset http_proxy https_proxy all_proxy no_proxy
+    update_terminal_title
+    
+    local host_ip=$(ip route show default 2>/dev/null | awk '{print $3}')
+    if [[ -z "$host_ip" ]] || [[ "$host_ip" == 10.* ]] || [[ "$host_ip" == 127.* ]]; then
+        host_ip=$(grep -v "127.0.0.53" /etc/resolv.conf | grep "nameserver" | awk '{print $2}' | grep -v "^10\." | head -n 1)
+    fi
+
+    if [[ -n "$host_ip" ]] && [[ "$host_ip" != "10."* ]] && [[ "$host_ip" != "127."* ]]; then
+        local proxy_url="http://$host_ip:$WSL_HTTP_PORT"
+        local code=$(curl -s -x "$proxy_url" --connect-timeout 1 -m 2 -o /dev/null -w "%{http_code}" "http://connect.rom.miui.com/generate_204" 2>/dev/null)
+        if [[ "$code" == "204" || "$code" == "200" ]]; then
+            echo -e "\e[32m💡 启动检测: 代理通道正常。当前保持直连，输入 'proxy_on' 开启。\e[0m \e[90m(输入 proxy_help 查看帮助)\e[0m"
+            export _PROXY_LAST_STATE="on"
+        else
+            echo -e "\e[33m⚠️ 启动检测: 代理未响应。当前保持直连，输入 'proxy_on' 尝试。\e[0m \e[90m(输入 proxy_help 查看帮助)\e[0m"
+            export _PROXY_LAST_STATE="off"
+        fi
+    else
+        echo -e "\e[33m⚠️ 启动检测: 无法获取宿主机 IP。当前保持直连，输入 'proxy_on' 尝试。\e[0m \e[90m(输入 proxy_help 查看帮助)\e[0m"
+        export _PROXY_LAST_STATE="off"
+    fi
+    
+    export _LAST_PROXY_CHECK=$(date +%s)
+}
+
+_init_proxy_env
+unset -f _init_proxy_env
+# --- WSL2 智能自动代理配置 结束 ---
+EOF
